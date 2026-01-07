@@ -4,7 +4,7 @@ from googleapiclient.discovery import build
 import os
 import pickle
 import base64
-from typing import Dict, List
+from typing import Dict, List, Optional
 import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -96,15 +96,31 @@ class EmailScanner:
             body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='ignore')
         return body
     
-    def scan(self, date_from: str, date_to: str, keywords: List[str], max_results: int = 50, require_attachments: bool = True, use_filtering: bool = True) -> Dict:
+    def scan(self, 
+             date_from: str, 
+             date_to: str, 
+             keywords: List[str], 
+             custom_query: Optional[str] = None,
+             max_results: int = 50, 
+             require_attachments: bool = True, 
+             use_filtering: bool = True) -> Dict:
         
         if not self.service:
             self.authenticate()
         
-        keyword_query = ' OR '.join([f'"{k}"' for k in keywords]) if keywords else ""
+        # Decide on the content query part
+        content_query = ""
+        if custom_query:
+            # Use the intelligent query provided by LLM
+            content_query = custom_query
+        elif keywords:
+            # Fallback to simple keyword chaining
+            content_query = ' OR '.join([f'"{k}"' for k in keywords])
+
+        # Construct the full Gmail API query
         query = f'after:{date_from} before:{date_to}'
         if require_attachments: query += ' has:attachment'
-        if keyword_query: query += f' ({keyword_query})'
+        if content_query: query += f' ({content_query})'
         
         print(f"Searching Gmail: {query}")
         
@@ -119,59 +135,61 @@ class EmailScanner:
             files_downloaded = 0
             
             for msg in messages:
-                message = self.service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
-                headers = message['payload']['headers']
-                
-                subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No_Subject')
-                sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-                date_str = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-                body = self._get_message_body(message['payload'])
-                
-                # Check Relevance
-                if use_filtering and keywords:
-                    if self._check_content_relevance(subject, keywords) == "LOW" and \
-                       self._check_content_relevance(body, keywords) == "LOW":
-                        continue
-                
-                # --- NEW NAMING LOGIC STARTS HERE ---
                 try:
-                    # Parse date to YYYY-MM-DD
-                    dt = parsedate_to_datetime(date_str)
-                    formatted_date = dt.strftime("%Y%m%d")
-                except:
-                    formatted_date = datetime.now().strftime("%Y%m%d")
+                    message = self.service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
+                    headers = message['payload']['headers']
+                    
+                    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No_Subject')
+                    sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
+                    date_str = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+                    body = self._get_message_body(message['payload'])
+                    
+                    # Check Relevance using the Keywords (even if custom_query was used for search)
+                    if use_filtering and keywords:
+                        if self._check_content_relevance(subject, keywords) == "LOW" and \
+                        self._check_content_relevance(body, keywords) == "LOW":
+                            continue
+                    
+                    # --- Naming Logic ---
+                    try:
+                        dt = parsedate_to_datetime(date_str)
+                        formatted_date = dt.strftime("%Y%m%d")
+                    except:
+                        formatted_date = datetime.now().strftime("%Y%m%d")
 
-                # Clean Sender (remove <email>) and Subject
-                clean_sender = self._sanitize_filename(sender.split('<')[0])[:15]
-                clean_subject = self._sanitize_filename(subject)[:30]
-                # -------------------------------------
+                    clean_sender = self._sanitize_filename(sender.split('<')[0])[:15]
+                    clean_subject = self._sanitize_filename(subject)[:30]
+                    # --------------------
 
-                attachments = []
-                if 'parts' in message['payload']:
-                    for part in message['payload']['parts']:
-                        if part.get('filename'):
-                            original_filename = part['filename']
-                            if original_filename.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx')):
-                                if require_attachments and 'attachmentId' in part['body']:
-                                    
-                                    # Create Custom Filename: 20240101_Sender_Subject_OriginalName.pdf
-                                    _, ext = os.path.splitext(original_filename)
-                                    new_filename = f"{formatted_date}_{clean_sender}_{clean_subject}{ext}"
-                                    
-                                    filepath = self._download_attachment(msg['id'], part['body']['attachmentId'], new_filename)
-                                    
-                                    if filepath:
-                                        attachments.append({"filename": new_filename, "filepath": filepath})
-                                        files_downloaded += 1
+                    attachments = []
+                    if 'parts' in message['payload']:
+                        for part in message['payload']['parts']:
+                            if part.get('filename'):
+                                original_filename = part['filename']
+                                # Basic extension check
+                                if original_filename.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx')):
+                                    if require_attachments and 'attachmentId' in part['body']:
+                                        
+                                        _, ext = os.path.splitext(original_filename)
+                                        new_filename = f"{formatted_date}_{clean_sender}_{clean_subject}{ext}"
+                                        
+                                        filepath = self._download_attachment(msg['id'], part['body']['attachmentId'], new_filename)
+                                        
+                                        if filepath:
+                                            attachments.append({"filename": new_filename, "filepath": filepath})
+                                            files_downloaded += 1
 
-                email_results.append({
-                    "id": msg['id'],
-                    "subject": subject,
-                    "sender": sender,
-                    "date": date_str,
-                    "body": body[:2000],
-                    "attachments": attachments
-                })
+                    email_results.append({
+                        "id": msg['id'],
+                        "subject": subject,
+                        "sender": sender,
+                        "date": date_str,
+                        "body": body[:2000],
+                        "attachments": attachments
+                    })
+                except Exception as msg_err:
+                    print(f"Error processing message {msg.get('id')}: {msg_err}")
+                    continue
             
             return {
                 "success": True,
@@ -184,6 +202,6 @@ class EmailScanner:
         except Exception as e:
             return {"success": False, "error": str(e), "results": []}
 
-def scan_emails(date_from: str, date_to: str, keywords: List[str], max_results: int = 50, require_attachments: bool = True, use_filtering: bool = True) -> Dict:
+def scan_emails(date_from: str, date_to: str, keywords: List[str], custom_query: Optional[str] = None, max_results: int = 50, require_attachments: bool = True, use_filtering: bool = True) -> Dict:
     scanner = EmailScanner()
-    return scanner.scan(date_from, date_to, keywords, max_results, require_attachments, use_filtering)
+    return scanner.scan(date_from, date_to, keywords, custom_query, max_results, require_attachments, use_filtering)

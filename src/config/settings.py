@@ -30,7 +30,7 @@ class Settings:
         os.makedirs(cls.PROCESSED_DATA_PATH, exist_ok=True)
         os.makedirs(cls.VECTOR_STORE_PATH, exist_ok=True)
     
-    GEMINI_MODEL = "gemini-2.5-flash"
+    GEMINI_MODEL = "gemini-2.5-flash-lite"
     EMBEDDING_MODEL = "voyage-3.5-lite"
 
     ENABLE_EMAIL_SCANNING = os.getenv("ENABLE_EMAIL_SCANNING", "true").lower() == "true"

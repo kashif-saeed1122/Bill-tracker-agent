@@ -1,5 +1,4 @@
 from langgraph.graph import StateGraph, END
-from IPython.display import Image, display
 from src.agent.state import AgentState, create_initial_state
 from src.agent.nodes import (
     intent_classifier_node,
@@ -92,7 +91,7 @@ def build_graph() -> StateGraph:
         }
     )
     
-    # ==================== FIXED: Comprehensive Conditional Edges ====================
+    # ==================== Comprehensive Conditional Edges ====================
     # All mappings include ALL possible steps to prevent KeyErrors
     
     COMPREHENSIVE_STEP_MAPPING = {
@@ -195,23 +194,7 @@ class BillTrackerAgent:
     ) -> Dict:
         """
         Process user query through the agent workflow.
-        
-        Args:
-            user_query: User's natural language query
-            user_id: User identifier for personalization
-            verbose: Whether to print execution details
-            
-        Returns:
-            Dict containing:
-                - success: bool
-                - response: str (final agent response)
-                - intent: str (classified intent)
-                - tools_used: List[str] (tools invoked)
-                - completed_steps: List[str] (workflow steps completed)
-                - execution_time: float (seconds)
-                - errors: List[str] (any errors encountered)
         """
-        
         start_time = datetime.now()
         
         if verbose:
@@ -264,6 +247,8 @@ class BillTrackerAgent:
             
             if verbose:
                 print(f"\n❌ ERROR: {str(e)}")
+                import traceback
+                traceback.print_exc()
             
             return {
                 "success": False,
@@ -276,147 +261,26 @@ class BillTrackerAgent:
                 "errors": [str(e)],
                 "metadata": {}
             }
-    
-    async def ainvoke(
-        self, 
-        user_query: str, 
-        user_id: str = "default",
-        verbose: bool = True
-    ) -> Dict:
-        """
-        Async version of invoke.
-        
-        Args:
-            user_query: User's natural language query
-            user_id: User identifier
-            verbose: Whether to print execution details
-            
-        Returns:
-            Dict with execution results
-        """
-        # For async execution, would use graph.ainvoke()
-        # For now, wrapping synchronous call
-        return self.invoke(user_query, user_id, verbose)
-    
-    def stream(self, user_query: str, user_id: str = "default"):
-        """
-        Stream agent execution step by step.
-        
-        Args:
-            user_query: User's natural language query
-            user_id: User identifier
-            
-        Yields:
-            State updates as they occur
-        """
-        initial_state = create_initial_state(user_query=user_query, user_id=user_id)
-        
-        for state in self.graph.stream(initial_state):
-            yield state
-    
-    def get_graph_visualization(self) -> str:
-        """
-        Get a text representation of the graph structure.
-        
-        Returns:
-            String describing the graph nodes and edges
-        """
-        try:
-            # Get the graph structure
-            graph_str = "Bill Tracker Agent Graph Structure:\n\n"
-            graph_str += "Entry Point: intent_classifier\n\n"
-            graph_str += "Nodes:\n"
-            graph_str += "  - intent_classifier\n"
-            graph_str += "  - planner\n"
-            graph_str += "  - email_scanner\n"
-            graph_str += "  - pdf_processor\n"
-            graph_str += "  - data_extractor\n"
-            graph_str += "  - database_saver\n"
-            graph_str += "  - rag_indexer\n"
-            graph_str += "  - rag_retriever\n"
-            graph_str += "  - database_query\n"
-            graph_str += "  - web_searcher\n"
-            graph_str += "  - reminder_creator\n"
-            graph_str += "  - response_generator\n"
-            graph_str += "  - error_handler\n"
-            
-            return graph_str
-        except Exception as e:
-            return f"Could not generate visualization: {str(e)}"
 
 
 # ==================== Convenience Functions ====================
 
 def create_agent() -> BillTrackerAgent:
-    """
-    Factory function to create a new agent instance.
-    
-    Returns:
-        Initialized BillTrackerAgent
-    """
+    """Factory function to create a new agent instance."""
     return BillTrackerAgent()
 
 
-def quick_query(query: str, user_id: str = "default", verbose: bool = True) -> str:
-    """
-    Quick utility to run a query and get response.
-    
-    Args:
-        query: User query
-        user_id: User identifier
-        verbose: Print execution details
-        
-    Returns:
-        Agent response string
-    """
-    agent = create_agent()
-    result = agent.invoke(query, user_id, verbose)
-    return result["response"]
-
-
 # ==================== Testing ====================
-
-def test_agent():
-    """
-    Test the agent with various queries.
-    """
-    print("\n" + "="*70)
-    print("TESTING BILL TRACKER AGENT")
-    print("="*70)
-    
-    agent = create_agent()
-    
-    # Test queries
-    test_queries = [
-        "Show me all my upcoming bills",
-        "Scan my email for new bills",
-        "What did I spend on utilities last month?",
-        "Find me a cheaper alternative to Netflix",
-        "Add a new bill: Electric Company, $150, due Feb 15"
-    ]
-    
-    for i, query in enumerate(test_queries, 1):
-        print(f"\n{'='*70}")
-        print(f"TEST {i}/{len(test_queries)}")
-        print(f"{'='*70}")
-        
-        result = agent.invoke(query, verbose=True)
-        
-        print(f"\n📤 RESPONSE:")
-        print(result["response"])
-        
-        if result["errors"]:
-            print(f"\n⚠️  ERRORS:")
-            for error in result["errors"]:
-                print(f"  - {error}")
-    
-    print(f"\n{'='*70}")
-    print("TESTING COMPLETE")
-    print(f"{'='*70}\n")
-
-
-graph = build_graph()
+# Move testing logic to check for __main__ to avoid running on import
 
 if __name__ == "__main__":
-    # Run tests
+    def test_agent():
+        print("\n" + "="*70)
+        print("TESTING BILL TRACKER AGENT")
+        print("="*70)
+        
+        agent = create_agent()
+        result = agent.invoke("Show me all my upcoming bills", verbose=True)
+        print(f"\n📤 RESPONSE: {result['response']}")
+
     test_agent()

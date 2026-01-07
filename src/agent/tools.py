@@ -7,6 +7,7 @@ external systems (Gmail, PDF parsing, RAG/Vector Store, Web Search).
 Key Changes:
 - Replaced SQL Database tools with RAG-based storage and retrieval.
 - Added comprehensive docstrings for better Agent decision-making.
+- Updated scan_emails to support dynamic, intelligent queries.
 """
 
 from langchain.tools import BaseTool, tool
@@ -25,6 +26,7 @@ def scan_emails(
     date_from: str,
     date_to: str,
     keywords: List[str],
+    custom_query: Optional[str] = None,
     max_results: int = 50,
     require_attachments: bool = True,
     use_filtering: bool = True
@@ -39,6 +41,7 @@ def scan_emails(
         date_from (str): Start date for the search in 'YYYY-MM-DD' format.
         date_to (str): End date for the search in 'YYYY-MM-DD' format.
         keywords (List[str]): A list of keywords to filter emails (e.g., ["invoice", "netflix"]).
+        custom_query (str): A precise Gmail search query string (e.g. "(university OR college) AND (Germany)").
         max_results (int): Maximum number of emails to retrieve (default: 50).
         require_attachments (bool): If True, only returns emails that have files attached (good for PDF bills).
         use_filtering (bool): If True, applies content relevance checks.
@@ -51,6 +54,7 @@ def scan_emails(
         date_from=date_from,
         date_to=date_to,
         keywords=keywords,
+        custom_query=custom_query,
         max_results=max_results,
         require_attachments=require_attachments,
         use_filtering=use_filtering
