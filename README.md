@@ -1,4 +1,3 @@
-```markdown
 # Bill Tracker Agent (Open Source)
 
 A fully local, intelligent AI agent that manages your bills, scans emails, finds deals, and sends reminders via WhatsApp, Telegram, or Email. Built with LangGraph, Gemini, and Voyage AI.
@@ -119,5 +118,5 @@ This is an open-source project! Feel free to:
 ## License
 
 MIT
-```
+
 ```
