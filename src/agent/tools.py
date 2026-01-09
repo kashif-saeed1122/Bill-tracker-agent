@@ -1,15 +1,3 @@
-"""
-LangChain Tools for Bill Tracker Agent.
-
-This module provides the interface tools that the AI agent uses to interact with
-external systems (Gmail, PDF parsing, RAG/Vector Store, Web Search).
-
-Key Changes:
-- Replaced SQL Database tools with RAG-based storage and retrieval.
-- Added comprehensive docstrings for better Agent decision-making.
-- Updated scan_emails to support dynamic, intelligent queries.
-"""
-
 from langchain.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -19,20 +7,18 @@ from src.modules.email_scanner import scan_emails as _scan_emails_impl
 from src.config.settings import settings
 
 
-# ==================== Tool Implementations ====================
-
 @tool
 def scan_emails(
     date_from: str,
     date_to: str,
-    keywords: List[str],
     custom_query: Optional[str] = None,
+    user_query: Optional[str] = None,
     max_results: int = 50,
     require_attachments: bool = True,
     use_filtering: bool = True
 ) -> Dict[str, Any]:
     """
-    Scans the user's Gmail inbox for emails matching specific criteria.
+    Scans the user's Gmail inbox for emails matching specific criteria using intelligent LLM-based relevance filtering.
 
     Use this tool when you need to find recent bills, invoices, promotions, or 
     order confirmations directly from the source.
@@ -40,21 +26,21 @@ def scan_emails(
     Args:
         date_from (str): Start date for the search in 'YYYY-MM-DD' format.
         date_to (str): End date for the search in 'YYYY-MM-DD' format.
-        keywords (List[str]): A list of keywords to filter emails (e.g., ["invoice", "netflix"]).
         custom_query (str): A precise Gmail search query string (e.g. "(university OR college) AND (Germany)").
+        user_query (str): The original natural language user query for LLM-based relevance evaluation.
         max_results (int): Maximum number of emails to retrieve (default: 50).
         require_attachments (bool): If True, only returns emails that have files attached (good for PDF bills).
-        use_filtering (bool): If True, applies content relevance checks.
+        use_filtering (bool): If True, applies LLM-based content relevance checks.
 
     Returns:
-        Dict: A dictionary containing 'success' status, counts, and a list of 'results' 
-              (emails with body, sender, and attachment paths).
+        Dict: A dictionary containing 'success' status, counts, 'filtered_log' with reasons for filtered emails,
+              and a list of 'results' (emails with body, sender, and attachment paths).
     """
     return _scan_emails_impl(
         date_from=date_from,
         date_to=date_to,
-        keywords=keywords,
         custom_query=custom_query,
+        user_query=user_query,
         max_results=max_results,
         require_attachments=require_attachments,
         use_filtering=use_filtering
@@ -117,8 +103,8 @@ def extract_data(text: str, extraction_type: str = "bills") -> Dict[str, Any]:
     
     try:
         llm = LLMInterface(
-            api_key=settings.GOOGLE_API_KEY,
-            model=settings.GEMINI_MODEL
+            api_key=settings.OPENAI_API_KEY,
+            model=settings.OPENAI_MODEL
         )
         
         result = llm.extract_data(text=text, extraction_type=extraction_type)
@@ -146,8 +132,8 @@ def classify_intent(user_query: str) -> Dict[str, Any]:
     
     try:
         llm = LLMInterface(
-            api_key=settings.GOOGLE_API_KEY,
-            model=settings.GEMINI_MODEL
+            api_key=settings.OPENAI_API_KEY,
+            model=settings.OPENAI_MODEL
         )
         
         result = llm.classify_intent(user_query=user_query)
@@ -155,8 +141,6 @@ def classify_intent(user_query: str) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e), "intent": "unknown"}
 
-
-# ==================== RAG / Storage Tools (Replacing Database) ====================
 
 @tool
 def save_bill(bill_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -178,8 +162,6 @@ def save_bill(bill_data: Dict[str, Any]) -> Dict[str, Any]:
     try:
         rag = RAGSystem(settings.VOYAGE_API_KEY, settings.VECTOR_STORE_PATH)
         
-        # Convert structured data into a descriptive text block for embedding
-        # This ensures the RAG system can semantically search the content.
         type_label = bill_data.get('type', 'Document')
         text_content = f"--- {type_label} Data ---\n"
         
@@ -187,7 +169,6 @@ def save_bill(bill_data: Dict[str, Any]) -> Dict[str, Any]:
             if value:
                 text_content += f"{key}: {value}\n"
         
-        # Add to Vector Store
         return rag.add_document(text=text_content, metadata=bill_data)
         
     except Exception as e:
@@ -215,7 +196,6 @@ def query_database(query_type: str, filters: Dict = {}, days: int = 7) -> Dict[s
     try:
         rag = RAGSystem(settings.VOYAGE_API_KEY, settings.VECTOR_STORE_PATH)
         
-        # Transform structural query intentions into semantic search strings
         search_query = ""
         
         if query_type == "upcoming":
@@ -228,11 +208,9 @@ def query_database(query_type: str, filters: Dict = {}, days: int = 7) -> Dict[s
         else:
             search_query = f"{query_type} documents"
             
-        # Append vendor filter to query if present
         if filters.get("vendor"):
             search_query += f" from {filters['vendor']}"
             
-        # Perform RAG search
         return rag.search(query=search_query, filters=filters, top_k=10)
         
     except Exception as e:
@@ -288,8 +266,6 @@ def add_to_rag(text: str, metadata: Dict, doc_id: Optional[str] = None) -> Dict[
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-
-# ==================== Web & Reminder Tools ====================
 
 @tool
 def web_search(query: str, search_type: str = "general", max_results: int = 5) -> Dict[str, Any]:
@@ -382,8 +358,6 @@ def send_reminder(recipient_email: str, reminder_data: Dict, method: str = "emai
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-
-# ==================== Tool Registry ====================
 
 def get_all_tools() -> List[BaseTool]:
     """

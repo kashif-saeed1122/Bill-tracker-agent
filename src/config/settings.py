@@ -8,6 +8,7 @@ load_dotenv()
 class Settings:
     
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
         
     EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
@@ -31,7 +32,9 @@ class Settings:
         os.makedirs(cls.VECTOR_STORE_PATH, exist_ok=True)
     
     GEMINI_MODEL = "gemini-2.5-flash-lite"
+    OPENAI_MODEL = "gpt-4.1-nano"
     EMBEDDING_MODEL = "voyage-3.5-lite"
+    
 
     ENABLE_EMAIL_SCANNING = os.getenv("ENABLE_EMAIL_SCANNING", "true").lower() == "true"
     ENABLE_RAG = True

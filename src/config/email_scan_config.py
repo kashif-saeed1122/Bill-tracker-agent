@@ -102,12 +102,13 @@ class EmailScanConfig:
         },
         
         "universities": {
-            "name": "University Communications",
+            "name": "MSC Application",
             "keywords": [
                 "admission", "offer letter", "acceptance letter", "university",
                 "college", "enrollment", "admission offer", "congratulations",
                 "admitted", "application status", "decision letter", "scholarship",
-                "tuition", "financial aid", "student", "academic"
+                "tuition", "financial aid", "student", "academic", "MSc Application", "Submitted CS-29710-0",
+                "Assessment Fee"
             ],
             "subject_patterns": [
                 "admission", "offer", "acceptance", "university", "college"
