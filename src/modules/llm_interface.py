@@ -1,4 +1,4 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
@@ -64,7 +64,6 @@ class RelevanceEvaluation(BaseModel):
 class ScanParameters(BaseModel):
     """Parameters for intelligent email scanning"""
     gmail_search_query: str = Field(description="Optimized Gmail search query string (e.g., '(invoice OR bill) AND (due OR paid)')")
-    keywords: List[str] = Field(description="List of relevant keywords to check in body text for relevance scoring")
     date_range_days: int = Field(default=30, description="Suggested number of days to scan back")
     require_attachments: bool = Field(default=True, description="Whether to filter for emails with attachments")
 
@@ -75,17 +74,16 @@ class LLMInterface:
     def __init__(
         self, 
         api_key: str,
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "",
         temperature: float = 0.1
     ):
         self.model_name = model
         self.temperature = temperature
         
-        self.llm = ChatGoogleGenerativeAI(
+        self.llm = ChatOpenAI(
             model=model,
-            google_api_key=api_key,
+            api_key=api_key,
             temperature=temperature,
-            convert_system_message_to_human=True
         )
         
         # Registry mapping string types to Pydantic models
@@ -293,7 +291,7 @@ Provide evaluation:""")
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an expert at constructing Gmail search queries.
-            Convert the user's natural language request into a precise Gmail search query and a list of relevance keywords.
+            Convert the user's natural language request into a precise Gmail search query.
             
             Rules for Gmail Query:
             - Use OR for synonyms (e.g., (university OR college OR admission))
@@ -301,8 +299,7 @@ Provide evaluation:""")
             - Do NOT include date filters in the query string (dates are handled separately).
             - Keep it broad enough to catch variations but specific enough to reduce noise.
             
-            Rules for Keywords:
-            - Provide 5-10 specific words found in the body of such emails to verify relevance.
+            Rules for Attachments:
             - Provide a boolean "require_attachments" based on if the user is looking for a document (PDF/Image) or just information.
             """),
             ("human", """User Request: {query}
@@ -322,7 +319,6 @@ Provide evaluation:""")
             return {
                 "success": True,
                 "gmail_query": result.gmail_search_query,
-                "keywords": result.keywords,
                 "days": result.date_range_days,
                 "require_attachments": result.require_attachments
             }
@@ -331,7 +327,6 @@ Provide evaluation:""")
             return {
                 "success": False,
                 "gmail_query": "category:primary",
-                "keywords": ["bill", "invoice", "receipt"],
                 "days": 30,
                 "require_attachments": True
             }

@@ -4,10 +4,12 @@ from googleapiclient.discovery import build
 import os
 import pickle
 import base64
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from src.modules.llm_interface import LLMInterface
+from src.config.settings import settings
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
@@ -19,6 +21,7 @@ class EmailScanner:
         self.service = None
         self.download_dir = "data/raw/attachments"
         os.makedirs(self.download_dir, exist_ok=True)
+        self.filtered_emails_log = []
     
     def authenticate(self):
         creds = None
@@ -39,18 +42,23 @@ class EmailScanner:
         self.service = build('gmail', 'v1', credentials=creds)
         return True
     
-    def _check_content_relevance(self, text: str, keywords: List[str]) -> str:
-        if not keywords:
-            return "HIGH"
-        text_lower = text.lower()
-        matches = sum(1 for kw in keywords if kw.lower() in text_lower)
-        if matches >= 2: return "HIGH"
-        elif matches >= 1: return "MEDIUM"
-        return "LOW"
+    def _is_relevant_via_llm(self, user_query: str, sender: str, subject: str, body: str) -> Dict[str, any]:        
+        try:
+            email_content = f"From: {sender}\nSubject: {subject}\n\n{body[:1000]}"
+            
+            llm = LLMInterface(settings.OPENAI_API_KEY, settings.OPENAI_MODEL)
+            result = llm.evaluate_relevance(query=user_query, document=email_content)
+            
+            return {
+                "is_relevant": result.get("is_relevant", False),
+                "score": result.get("relevance_score", 0.0),
+                "reason": result.get("reasoning", "")
+            }
+        except Exception as e:
+            print(f"   ⚠️ LLM relevance check failed: {e}")
+            return {"is_relevant": True, "score": 1.0, "reason": "LLM check failed, included by default"}
     
     def _sanitize_filename(self, text: str) -> str:
-        """Helper to create safe filenames from email subjects/senders"""
-        # Keep only alphanumeric and spaces, replace spaces with underscores
         safe = re.sub(r'[^a-zA-Z0-9\s]', '', text)
         return re.sub(r'\s+', '_', safe.strip())
 
@@ -63,7 +71,6 @@ class EmailScanner:
             file_data = base64.urlsafe_b64decode(attachment['data'])
             filepath = os.path.join(self.download_dir, filename)
             
-            # Handle duplicates
             counter = 1
             base_name = filename
             while os.path.exists(filepath):
@@ -99,8 +106,8 @@ class EmailScanner:
     def scan(self, 
              date_from: str, 
              date_to: str, 
-             keywords: List[str], 
              custom_query: Optional[str] = None,
+             user_query: Optional[str] = None,
              max_results: int = 50, 
              require_attachments: bool = True, 
              use_filtering: bool = True) -> Dict:
@@ -108,19 +115,16 @@ class EmailScanner:
         if not self.service:
             self.authenticate()
         
-        # Decide on the content query part
-        content_query = ""
-        if custom_query:
-            # Use the intelligent query provided by LLM
-            content_query = custom_query
-        elif keywords:
-            # Fallback to simple keyword chaining
-            content_query = ' OR '.join([f'"{k}"' for k in keywords])
-
-        # Construct the full Gmail API query
+        self.filtered_emails_log = []
+        
+        # Construct the Gmail query string
         query = f'after:{date_from} before:{date_to}'
-        if require_attachments: query += ' has:attachment'
-        if content_query: query += f' ({content_query})'
+        
+        if require_attachments: 
+            query += ' has:attachment'
+            
+        if custom_query: 
+            query += f' ({custom_query})'
         
         print(f"Searching Gmail: {query}")
         
@@ -129,10 +133,11 @@ class EmailScanner:
             messages = results.get('messages', [])
             
             if not messages:
-                return {"success": True, "emails_found": 0, "results": []}
+                return {"success": True, "emails_found": 0, "filtered_count": 0, "filtered_out": 0, "results": []}
             
             email_results = []
             files_downloaded = 0
+            filtered_out_count = 0
             
             for msg in messages:
                 try:
@@ -144,13 +149,23 @@ class EmailScanner:
                     date_str = next((h['value'] for h in headers if h['name'] == 'Date'), '')
                     body = self._get_message_body(message['payload'])
                     
-                    # Check Relevance using the Keywords (even if custom_query was used for search)
-                    if use_filtering and keywords:
-                        if self._check_content_relevance(subject, keywords) == "LOW" and \
-                        self._check_content_relevance(body, keywords) == "LOW":
+                    # LLM Relevance Check (No keyword pre-filtering)
+                    if use_filtering and user_query:
+                        relevance = self._is_relevant_via_llm(user_query, sender, subject, body)
+                        
+                        if not relevance["is_relevant"]:
+                            filtered_out_count += 1
+                            self.filtered_emails_log.append({
+                                "subject": subject,
+                                "sender": sender,
+                                "reason": relevance["reason"],
+                                "score": relevance["score"]
+                            })
+                            print(f"   ⊗ Filtered: {subject[:50]} (Score: {relevance['score']:.2f})")
                             continue
+                        else:
+                            print(f"   ✓ Relevant: {subject[:50]} (Score: {relevance['score']:.2f})")
                     
-                    # --- Naming Logic ---
                     try:
                         dt = parsedate_to_datetime(date_str)
                         formatted_date = dt.strftime("%Y%m%d")
@@ -159,14 +174,12 @@ class EmailScanner:
 
                     clean_sender = self._sanitize_filename(sender.split('<')[0])[:15]
                     clean_subject = self._sanitize_filename(subject)[:30]
-                    # --------------------
 
                     attachments = []
                     if 'parts' in message['payload']:
                         for part in message['payload']['parts']:
                             if part.get('filename'):
                                 original_filename = part['filename']
-                                # Basic extension check
                                 if original_filename.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx')):
                                     if require_attachments and 'attachmentId' in part['body']:
                                         
@@ -191,17 +204,33 @@ class EmailScanner:
                     print(f"Error processing message {msg.get('id')}: {msg_err}")
                     continue
             
+            if self.filtered_emails_log:
+                print(f"\n   📋 Filtered Out Emails Log:")
+                for i, filtered in enumerate(self.filtered_emails_log[:5], 1):
+                    print(f"      {i}. {filtered['subject'][:40]} - {filtered['reason'][:60]}")
+                if len(self.filtered_emails_log) > 5:
+                    print(f"      ... and {len(self.filtered_emails_log) - 5} more")
+            
             return {
                 "success": True,
                 "emails_found": len(messages),
                 "filtered_count": len(email_results),
+                "filtered_out": filtered_out_count,
                 "files_downloaded": files_downloaded,
+                "filtered_log": self.filtered_emails_log,
                 "results": email_results
             }
         
         except Exception as e:
             return {"success": False, "error": str(e), "results": []}
 
-def scan_emails(date_from: str, date_to: str, keywords: List[str], custom_query: Optional[str] = None, max_results: int = 50, require_attachments: bool = True, use_filtering: bool = True) -> Dict:
+
+def scan_emails(date_from: str, 
+                date_to: str, 
+                custom_query: Optional[str] = None,
+                user_query: Optional[str] = None,
+                max_results: int = 50, 
+                require_attachments: bool = True, 
+                use_filtering: bool = True) -> Dict:
     scanner = EmailScanner()
-    return scanner.scan(date_from, date_to, keywords, custom_query, max_results, require_attachments, use_filtering)
+    return scanner.scan(date_from, date_to, custom_query, user_query, max_results, require_attachments, use_filtering)
