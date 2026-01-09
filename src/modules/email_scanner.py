@@ -44,7 +44,12 @@ class EmailScanner:
     
     def _is_relevant_via_llm(self, user_query: str, sender: str, subject: str, body: str) -> Dict[str, any]:        
         try:
-            email_content = f"From: {sender}\nSubject: {subject}\n\n{body[:1000]}"
+            # LLM reads FULL email content
+            email_content = f"""From: {sender}
+Subject: {subject}
+
+Body:
+{body[:2500]}"""  # Increased limit for more context
             
             llm = LLMInterface(settings.OPENAI_API_KEY, settings.OPENAI_MODEL)
             result = llm.evaluate_relevance(query=user_query, document=email_content)
@@ -106,8 +111,8 @@ class EmailScanner:
     def scan(self, 
              date_from: str, 
              date_to: str, 
-             custom_query: Optional[str] = None,
              user_query: Optional[str] = None,
+             user_email: Optional[str] = None,
              max_results: int = 50, 
              require_attachments: bool = True, 
              use_filtering: bool = True) -> Dict:
@@ -117,15 +122,16 @@ class EmailScanner:
         
         self.filtered_emails_log = []
         
-        # Construct the Gmail query string
+        # SIMPLE Gmail query - just dates and exclude user's sent emails
         query = f'after:{date_from} before:{date_to}'
         
         if require_attachments: 
             query += ' has:attachment'
-            
-        if custom_query: 
-            query += f' ({custom_query})'
         
+        # Exclude user's own sent emails
+        if user_email:
+            query += f' -from:{user_email}'
+            
         print(f"Searching Gmail: {query}")
         
         try:
@@ -149,7 +155,7 @@ class EmailScanner:
                     date_str = next((h['value'] for h in headers if h['name'] == 'Date'), '')
                     body = self._get_message_body(message['payload'])
                     
-                    # LLM Relevance Check (No keyword pre-filtering)
+                    # LLM FULLY READS each email (sender + subject + body)
                     if use_filtering and user_query:
                         relevance = self._is_relevant_via_llm(user_query, sender, subject, body)
                         
@@ -227,10 +233,10 @@ class EmailScanner:
 
 def scan_emails(date_from: str, 
                 date_to: str, 
-                custom_query: Optional[str] = None,
                 user_query: Optional[str] = None,
+                user_email: Optional[str] = None,
                 max_results: int = 50, 
                 require_attachments: bool = True, 
                 use_filtering: bool = True) -> Dict:
     scanner = EmailScanner()
-    return scanner.scan(date_from, date_to, custom_query, user_query, max_results, require_attachments, use_filtering)
+    return scanner.scan(date_from, date_to, user_query, user_email, max_results, require_attachments, use_filtering)

@@ -11,8 +11,8 @@ from src.config.settings import settings
 def scan_emails(
     date_from: str,
     date_to: str,
-    custom_query: Optional[str] = None,
     user_query: Optional[str] = None,
+    user_email: Optional[str] = None,
     max_results: int = 50,
     require_attachments: bool = True,
     use_filtering: bool = True
@@ -20,16 +20,16 @@ def scan_emails(
     """
     Scans the user's Gmail inbox for emails matching specific criteria using intelligent LLM-based relevance filtering.
 
-    Use this tool when you need to find recent bills, invoices, promotions, or 
-    order confirmations directly from the source.
+    The LLM FULLY READS each email (sender, subject, body) to determine relevance.
+    No keyword pre-filtering at Gmail level - fetches all emails in date range then applies AI comprehension.
 
     Args:
         date_from (str): Start date for the search in 'YYYY-MM-DD' format.
         date_to (str): End date for the search in 'YYYY-MM-DD' format.
-        custom_query (str): A precise Gmail search query string (e.g. "(university OR college) AND (Germany)").
         user_query (str): The original natural language user query for LLM-based relevance evaluation.
+        user_email (str): User's email address to exclude their sent emails from results.
         max_results (int): Maximum number of emails to retrieve (default: 50).
-        require_attachments (bool): If True, only returns emails that have files attached (good for PDF bills).
+        require_attachments (bool): If True, only returns emails that have files attached.
         use_filtering (bool): If True, applies LLM-based content relevance checks.
 
     Returns:
@@ -39,8 +39,8 @@ def scan_emails(
     return _scan_emails_impl(
         date_from=date_from,
         date_to=date_to,
-        custom_query=custom_query,
         user_query=user_query,
+        user_email=user_email,
         max_results=max_results,
         require_attachments=require_attachments,
         use_filtering=use_filtering

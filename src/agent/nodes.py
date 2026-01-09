@@ -1,21 +1,14 @@
 from src.agent.state import AgentState
 from src.agent.tools import (
-    classify_intent,
-    scan_emails,
-    parse_pdf,
-    extract_data,
-    save_bill,
-    add_to_rag,
-    rag_search,
-    query_database,
-    web_search,
-    create_reminder
+    classify_intent, scan_emails, parse_pdf, extract_data,
+    save_bill, add_to_rag, rag_search, query_database,
+    web_search, create_reminder
 )
 from datetime import datetime, timedelta
 import os
+import json
 from src.config.settings import settings
 from src.modules.llm_interface import LLMInterface
-
 
 
 def intent_classifier_node(state: AgentState) -> AgentState:
@@ -30,12 +23,9 @@ def intent_classifier_node(state: AgentState) -> AgentState:
         state["intent_confidence"] = result.get("confidence", 0.0)
         state["entities"] = result.get("entities", {})
         
-        scan_type = state["entities"].get("email_scan_type", "bills")
-        if state["intent"] == "scan_emails" and scan_type == "bills":
-             state["intent"] = "scan_bills"
-             
+        scan_type = state["entities"].get("email_scan_type", "general")
         state["completed_steps"] = state.get("completed_steps", []) + ["intent_classification"]
-        print(f"   Intent: {state['intent']} (Type: {scan_type})")
+        print(f"   Intent: {state['intent']} | Type: {scan_type} | Confidence: {state['intent_confidence']:.2f}")
     else:
         state["errors"] = state.get("errors", []) + [f"Intent failed: {result.get('error')}"]
         state["intent"] = "unknown"
@@ -48,11 +38,17 @@ def planner_node(state: AgentState) -> AgentState:
     
     plan = []
     
-    if intent in ["scan_bills", "scan_emails"]:
-        plan = ["email_scanner"]
-        plan.extend(["pdf_processor", "data_extractor", "database_saver"])
+    if intent == "scan_emails":
+        # Full pipeline: Gmail → Extract → Save to DB
+        plan = ["email_scanner", "pdf_processor", "data_extractor", "database_saver", "response_generator"]
+        print(f"   📧 Will fetch NEW emails from Gmail and save to DB")
             
-    elif intent == "query_history" or intent == "analyze_spending":
+    elif intent == "query_history":
+        # Search existing DB only (NO Gmail!)
+        plan = ["rag_retriever", "response_generator"]
+        print(f"   🔍 Will search EXISTING database (no Gmail scan)")
+        
+    elif intent == "analyze_spending":
         plan = ["database_query", "response_generator"]
         
     elif intent == "set_reminder":
@@ -65,57 +61,57 @@ def planner_node(state: AgentState) -> AgentState:
         plan = ["data_extractor", "database_saver", "response_generator"]
         
     else:
+        # Default: search existing data
         plan = ["rag_retriever", "response_generator"]
+        print(f"   🔍 Default: Searching database")
     
     state["plan"] = plan
     state["completed_steps"] = state.get("completed_steps", []) + ["planning"]
-    print(f"   Plan: {' -> '.join(plan)}")
+    print(f"   Plan: {' → '.join(plan)}")
     return state
 
 
 def email_scanner_node(state: AgentState) -> AgentState:
-    print(f"\n📧 EMAIL SCANNER: Scanning inbox...")    
+    print(f"\n📧 EMAIL SCANNER: Fetching from Gmail...")    
     try:
-        llm = LLMInterface(settings.OPENAI_API_KEY, settings.GEMINI_MODEL)
-        
-        current_date_str = datetime.now().strftime("%Y-%m-%d")
-        scan_params = llm.generate_scan_parameters(
-            user_query=state["user_query"],
-            current_date=current_date_str
-        )
-        
-        print(f"   Generated Query: {scan_params['gmail_query']}")
-        
-        days = state["entities"].get("scan_days", scan_params.get("days", 30))
+        days = state["entities"].get("scan_days", 30)
         date_from = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         date_to = datetime.now().strftime("%Y-%m-%d")
+        
+        scan_type = state["entities"].get("email_scan_type", "general")
+        require_attachments = scan_type in ["bills", "invoice", "receipts", "orders"]
+        
+        print(f"   Date range: {date_from} to {date_to}")
+        print(f"   Type: {scan_type} | Attachments: {require_attachments}")
         
         result = scan_emails.invoke({
             "date_from": date_from,
             "date_to": date_to,
-            "custom_query": scan_params['gmail_query'],
             "user_query": state["user_query"],
+            "user_email": settings.EMAIL_ADDRESS,
             "max_results": settings.EMAIL_SCAN_MAX_RESULTS,
-            "require_attachments": scan_params.get("require_attachments", True),
+            "require_attachments": require_attachments,
             "use_filtering": True
         })
         
         if result.get("success"):
             state["email_scan_results"] = result
             
-            if scan_params.get("require_attachments", True):
+            if require_attachments:
                 state["downloaded_files"] = [
-                    att["filepath"] for email in result.get("results", []) for att in email.get("attachments", [])
+                    att["filepath"] for email in result.get("results", []) 
+                    for att in email.get("attachments", [])
                 ]
             else:
                 state["downloaded_files"] = []
                 
-            print(f"   Found {result.get('filtered_count', 0)} relevant emails (filtered {result.get('filtered_out', 0)})")
+            print(f"   ✅ Found {result.get('filtered_count', 0)} relevant emails")
+            print(f"   ⊗ Filtered out {result.get('filtered_out', 0)} irrelevant emails")
         else:
             state["errors"] = state.get("errors", []) + [f"Scan failed: {result.get('error')}"]
             
     except Exception as e:
-        print(f"   ❌ Error in intelligent scan: {e}")
+        print(f"   ❌ Error: {e}")
         state["errors"] = state.get("errors", []) + [f"Scanner Error: {str(e)}"]
     
     state["completed_steps"] = state.get("completed_steps", []) + ["email_scanner"]
@@ -123,7 +119,7 @@ def email_scanner_node(state: AgentState) -> AgentState:
 
 
 def pdf_processor_node(state: AgentState) -> AgentState:
-    print(f"\n📄 PDF PROCESSOR: Processing documents...")
+    print(f"\n📄 PDF PROCESSOR: Processing attachments...")
     downloaded_files = state.get("downloaded_files", [])
     parse_results = []
     
@@ -142,29 +138,25 @@ def pdf_processor_node(state: AgentState) -> AgentState:
 
 
 def data_extractor_node(state: AgentState) -> AgentState:
-    print(f"\n🔍 DATA EXTRACTOR: extracting info...")
-    scan_type = state["entities"].get("email_scan_type", "bills")
+    print(f"\n🔍 DATA EXTRACTOR: Extracting structured data...")
+    scan_type = state["entities"].get("email_scan_type", "general")
     extracted_items = []
     
+    # Extract from PDFs
     for pdf in state.get("pdf_parse_results", []):
         if pdf.get("extracted_text"):
-            result = extract_data.invoke({
-                "text": pdf["extracted_text"],
-                "extraction_type": scan_type
-            })
+            result = extract_data.invoke({"text": pdf["extracted_text"], "extraction_type": scan_type})
             if result.get("success"):
                 data = result["extracted_data"]
                 data["source"] = pdf.get("file_path")
                 extracted_items.append(data)
 
+    # Extract from email bodies
     if not extracted_items and state.get("email_scan_results"):
         emails = state["email_scan_results"].get("results", [])
-        print(f"   Checking {len(emails)} email bodies...")
+        print(f"   Extracting from {len(emails)} email bodies...")
         for email in emails:
-            result = extract_data.invoke({
-                "text": email["body"],
-                "extraction_type": scan_type
-            })
+            result = extract_data.invoke({"text": email["body"], "extraction_type": scan_type})
             if result.get("success"):
                 data = result["extracted_data"]
                 data["source"] = f"Email: {email['subject']}"
@@ -172,28 +164,75 @@ def data_extractor_node(state: AgentState) -> AgentState:
                 
     state["extracted_bills"] = extracted_items
     state["completed_steps"] = state.get("completed_steps", []) + ["data_extractor"]
-    print(f"   Extracted {len(extracted_items)} items")
+    print(f"   ✅ Extracted {len(extracted_items)} items")
     return state
 
 
 def database_saver_node(state: AgentState) -> AgentState:
-    print(f"\n💾 RAG SAVER: Indexing items...")
+    print(f"\n💾 DATABASE SAVER: Indexing to Vector DB...")
     saved_ids = []
+    scan_type = state["entities"].get("email_scan_type", "general")
     
+    # Save extracted structured data
     for item in state.get("extracted_bills", []):
         result = save_bill.invoke({"bill_data": item})
         if result.get("success"):
             saved_ids.append(result.get("document_id", "unknown"))
+    
+    # CRITICAL: Save STRUCTURED email metadata to Vector DB
+    if state.get("email_scan_results"):
+        emails = state["email_scan_results"].get("results", [])
+        print(f"   Indexing {len(emails)} emails with structured metadata...")
+        
+        for email in emails:
+            # Create structured JSON for each email
+            email_doc = {
+                "type": "email",
+                "category": scan_type,
+                "sender": email.get("sender", ""),
+                "subject": email.get("subject", ""),
+                "date": email.get("date", ""),
+                "body_preview": email.get("body", "")[:500],
+                "summary": f"Email from {email.get('sender', '')} about {email.get('subject', '')}",
+                "has_attachments": len(email.get("attachments", [])) > 0
+            }
             
+            # Create searchable text content
+            text_content = f"""
+EMAIL DOCUMENT
+==============
+From: {email_doc['sender']}
+Subject: {email_doc['subject']}
+Date: {email_doc['date']}
+Category: {email_doc['category']}
+
+Summary: {email_doc['summary']}
+
+Body:
+{email.get('body', '')[:1000]}
+"""
+            
+            # Save to vector DB
+            result = add_to_rag.invoke({
+                "text": text_content,
+                "metadata": email_doc
+            })
+            
+            if result.get("success"):
+                saved_ids.append(result.get("document_id", ""))
+                print(f"   ✓ Indexed: {email.get('subject', '')[:50]}")
+    
+    # Save raw PDF content
     for pdf in state.get("pdf_parse_results", []):
         if pdf.get("extracted_text"):
             add_to_rag.invoke({
                 "text": pdf["extracted_text"],
-                "metadata": {"type": "raw_document", "path": pdf.get("file_path")}
+                "metadata": {"type": "pdf", "path": pdf.get("file_path")}
             })
 
     state["saved_bill_ids"] = saved_ids
     state["completed_steps"] = state.get("completed_steps", []) + ["database_saver"]
+    print(f"   ✅ Total indexed: {len(saved_ids)} documents")
     return state
 
 
@@ -203,16 +242,54 @@ def rag_indexer_node(state: AgentState) -> AgentState:
 
 
 def rag_retriever_node(state: AgentState) -> AgentState:
-    print(f"\n🔎 RAG RETRIEVER: Searching...")
-    res = rag_search.invoke({"query": state["user_query"]})
-    if res.get("success"):
-        state["retrieved_documents"] = res.get("results", [])
+    print(f"\n🔎 RAG RETRIEVER: Searching Vector DB...")
+    print(f"   Query: {state['user_query']}")
+    
+    try:
+        # Search with higher top_k to get more results
+        res = rag_search.invoke({"query": state["user_query"], "top_k": 10})
+        
+        if res.get("success"):
+            results = res.get("results", [])
+            
+            # Clean and format results to avoid serialization issues
+            cleaned_results = []
+            for doc in results:
+                cleaned_doc = {
+                    "id": str(doc.get("id", "")),
+                    "text": doc.get("text", ""),
+                    "metadata": doc.get("metadata", {}),
+                    "relevance_score": float(doc.get("relevance_score", 0))
+                }
+                cleaned_results.append(cleaned_doc)
+            
+            state["retrieved_documents"] = cleaned_results
+            print(f"   ✅ Found {len(cleaned_results)} relevant documents")
+            
+            # Log what was found
+            for i, doc in enumerate(cleaned_results[:3], 1):
+                metadata = doc.get("metadata", {})
+                if metadata.get("type") == "email":
+                    subject = metadata.get("subject", "No subject")[:50]
+                    score = doc.get("relevance_score", 0)
+                    print(f"      {i}. {subject} (Score: {score:.2f})")
+        else:
+            print(f"   ❌ Search failed: {res.get('error', 'Unknown error')}")
+            state["retrieved_documents"] = []
+    
+    except Exception as e:
+        print(f"   ❌ Exception in RAG retriever: {e}")
+        import traceback
+        traceback.print_exc()
+        state["retrieved_documents"] = []
+        state["errors"] = state.get("errors", []) + [f"RAG retriever error: {str(e)}"]
+    
     state["completed_steps"] = state.get("completed_steps", []) + ["rag_retriever"]
     return state
 
 
 def database_query_node(state: AgentState) -> AgentState:
-    print(f"\n🔎 HISTORY QUERY: Searching RAG...")
+    print(f"\n🔎 DATABASE QUERY: Searching...")
     res = query_database.invoke({"query_type": "upcoming"}) 
     if res.get("success"):
         state["database_results"] = res
@@ -236,20 +313,62 @@ def reminder_creator_node(state: AgentState) -> AgentState:
 
 def response_generator_node(state: AgentState) -> AgentState:
     print(f"\n💬 RESPONSE GENERATOR: Crafting response...")
-    from src.modules.llm_interface import LLMInterface
     
-    context = {
-        "intent": state.get("intent"),
-        "scan_type": state["entities"].get("email_scan_type"),
-        "extracted_items": state.get("extracted_bills", []),
-        "rag_results": state.get("retrieved_documents") or state.get("database_results"),
-        "errors": state.get("errors", [])
-    }
+    try:
+        # Validate API key
+        if not settings.OPENAI_API_KEY:
+            error_msg = "OPENAI_API_KEY not set in environment"
+            print(f"   ❌ {error_msg}")
+            state["final_response"] = f"Configuration error: {error_msg}"
+            state["errors"] = state.get("errors", []) + [error_msg]
+            state["completed_steps"] = state.get("completed_steps", []) + ["response_generator"]
+            return state
+        
+        # Format retrieved documents to be serializable
+        retrieved_docs = state.get("retrieved_documents", [])
+        formatted_docs = []
+        
+        for doc in retrieved_docs:
+            formatted_doc = {
+                "metadata": doc.get("metadata", {}),
+                "text": doc.get("text", "")[:500],  # Truncate long text
+                "relevance_score": float(doc.get("relevance_score", 0))
+            }
+            formatted_docs.append(formatted_doc)
+        
+        # Build context from retrieved data
+        context = {
+            "intent": state.get("intent"),
+            "scan_type": state["entities"].get("email_scan_type"),
+            "extracted_items": state.get("extracted_bills", [])[:5],  # Limit to 5
+            "retrieved_documents": formatted_docs[:10],  # Limit to 10
+            "database_results": state.get("database_results"),
+            "errors": state.get("errors", [])
+        }
+        
+        print(f"   Context: {len(formatted_docs)} documents")
+        print(f"   Using model: {settings.OPENAI_MODEL}")
+        
+        # Use OpenAI
+        llm = LLMInterface(settings.OPENAI_API_KEY, settings.OPENAI_MODEL)
+        result = llm.generate_response(state["user_query"], context)
+        
+        if result.get("success"):
+            state["final_response"] = result.get("response", "No response generated")
+            print(f"   ✅ Response generated")
+        else:
+            error_msg = result.get("error", "Unknown error")
+            print(f"   ❌ LLM Error: {error_msg}")
+            state["final_response"] = f"I found the documents but couldn't generate a response. Error: {error_msg}"
+            state["errors"] = state.get("errors", []) + [f"Response generation failed: {error_msg}"]
     
-    llm = LLMInterface(settings.GOOGLE_API_KEY, settings.GEMINI_MODEL)
-    result = llm.generate_response(state["user_query"], context)
+    except Exception as e:
+        print(f"   ❌ Exception in response generator: {e}")
+        import traceback
+        traceback.print_exc()
+        state["final_response"] = f"Error generating response: {str(e)}"
+        state["errors"] = state.get("errors", []) + [f"Response generator exception: {str(e)}"]
     
-    state["final_response"] = result.get("response", "Error generating response")
     state["completed_steps"] = state.get("completed_steps", []) + ["response_generator"]
     return state
 
