@@ -18,6 +18,7 @@ A fully local, intelligent AI agent that manages your emails, scans for bills/un
 - ✅ **Agentic Workflow**: Automatically decides whether to scan Gmail or query the database
 - ✅ **Structured Email Indexing**: Emails saved as JSON with metadata (sender, subject, category, date)
 - ✅ **Multi-Type Support**: bills, promotions, universities, orders, shipping, banking, insurance, and more
+- ✅ **Flexible Configuration**: Support for both .env and config.yaml with interactive setup wizard
 
 ## 🛠️ Installation
 
@@ -36,7 +37,22 @@ Requires Python 3.10+
 pip install -r requirements.txt
 ```
 
-### 3. Set Up Environment Variables
+### 3. Configuration Setup
+
+You have **three options** to configure the agent:
+
+#### Option A: Interactive Setup Wizard (Recommended)
+
+```bash
+python main.py --setup
+```
+
+This will guide you through:
+- API key configuration (OpenAI, Voyage AI)
+- Email credentials setup
+- Default settings customization
+
+#### Option B: .env File (Secure)
 
 Create a `.env` file in the root directory:
 
@@ -73,7 +89,78 @@ EMAIL_SCAN_MAX_RESULTS=50
 DEFAULT_EMAIL_SCAN_TYPE=general
 ```
 
-### 4. Set Up Gmail API Credentials
+#### Option C: config.yaml File (Convenient)
+
+Create a `config.yaml` file in the root directory:
+
+```yaml
+# LLM Configuration
+llm:
+  provider: "openai"
+  model: "gpt-4o-mini"
+  temperature: 0.1
+
+# Embeddings Configuration
+embeddings:
+  provider: "voyage"
+  model: "voyage-3-lite"
+
+# Date/Time Defaults
+scanning:
+  default_days_back: 30      # How many days to scan by default
+  date_format: "YYYY-MM-DD"
+  max_results: 50
+
+# API Keys (Optional - .env is more secure)
+api_keys:
+  openai_api_key: ""         # Leave empty to use .env
+  voyage_api_key: ""         # Leave empty to use .env
+
+# Email Credentials (Optional - .env is more secure)
+credentials:
+  email_address: ""
+  email_password: ""
+
+# Email Settings
+email:
+  gmail_credentials_path: "credentials.json"
+  gmail_token_path: "token.json"
+  smtp_server: "smtp.gmail.com"
+  smtp_port: 587
+  default_scan_type: "general"
+
+# Storage Configuration
+storage:
+  base_dir: "./data"
+  raw_data: "raw"
+  processed_data: "processed"
+  vector_store: "vector_store"
+
+# Feature Flags
+features:
+  enable_email_scanning: true
+  enable_rag: true
+  enable_reminders: true
+```
+
+**Configuration Priority:** Session keys > .env > config.yaml > Defaults
+
+**Security Note:** Use .env for API keys and credentials, use config.yaml for settings like model, days, etc.
+
+### 4. Verify Configuration
+
+```bash
+# Check if everything is configured correctly
+python diagnose_config.py
+
+# Validate all settings
+python main.py --validate
+
+# Show current configuration
+python main.py --show-config
+```
+
+### 5. Set Up Gmail API Credentials
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project
@@ -83,16 +170,19 @@ DEFAULT_EMAIL_SCAN_TYPE=general
 6. Download the JSON file and save it as `credentials.json` in the project root
 7. On first run, you'll be prompted to authorize the app in your browser
 
-### 5. Get API Keys
+### 6. Get API Keys
 
 **OpenAI API Key:**
 - Sign up at [OpenAI Platform](https://platform.openai.com/)
 - Go to API Keys section
 - Create new secret key
+- Format: `sk-proj-...`
 
-**Voyage AI API Key:**
+**Voyage AI API Key (Required for indexing!):**
 - Sign up at [Voyage AI](https://www.voyageai.com/)
 - Get your API key from dashboard
+- Format: `pa-v1-...`
+- **⚠️ Without this key, emails won't be indexed to the database!**
 
 ## 🏃 How to Run
 
@@ -131,6 +221,22 @@ python main.py --scan-type bills --days 30
 
 # Scan for promotions (last 7 days)
 python main.py --scan-type promotions --days 7
+```
+
+### Configuration Commands
+
+```bash
+# Run interactive setup
+python main.py --setup
+
+# Show current configuration
+python main.py --show-config
+
+# Validate configuration
+python main.py --validate
+
+# Enable interactive prompts for missing keys
+python main.py --interactive
 ```
 
 ## 💬 Example Commands
@@ -182,7 +288,7 @@ Gmail API → LLM Filtering → PDF Extraction → Data Structuring → Vector D
 1. **Email Scanner**: Fetches emails, applies LLM-based relevance filtering
 2. **PDF Processor**: Extracts text from attachments (PyPDF2 → pdfplumber → OCR)
 3. **Data Extractor**: Uses OpenAI to extract structured data (vendor, amount, date)
-4. **Database Saver**: Indexes emails as JSON with rich metadata
+4. **Database Saver**: Indexes emails as JSON with rich metadata using Voyage AI embeddings
 
 ### Email Storage Format
 
@@ -226,12 +332,13 @@ email-management-agent/
 │   │   ├── pdf_parser.py     # PDF extraction
 │   │   └── rag_system.py     # Vector DB operations
 │   └── config/
-│       └── settings.py       # Configuration
+│       └── settings.py       # Configuration loader
 ├── data/
 │   ├── raw/                  # Downloaded attachments
 │   └── vector_store/         # ChromaDB storage
+├── config.yaml               # Configuration file (optional)
 ├── credentials.json          # Gmail OAuth
-├── .env                      # API keys
+├── .env                      # API keys (recommended)
 └── main.py                   # Entry point
 ```
 
@@ -259,7 +366,13 @@ The agent can scan and categorize:
 - Output: $0.60 / 1M tokens
 - Perfect for most queries
 
-For complex queries, upgrade:
+For complex queries, upgrade via config.yaml:
+```yaml
+llm:
+  model: "gpt-4o"
+```
+
+Or via .env:
 ```env
 OPENAI_MODEL=gpt-4o
 ```
@@ -274,6 +387,189 @@ The agent uses LLM to read FULL emails (sender + subject + body) and intelligent
 - Use **"what/show/do I have"** when querying existing data
 - The agent automatically decides the right approach
 
+### Customizing Defaults
+
+Edit config.yaml to change default behavior:
+```yaml
+scanning:
+  default_days_back: 60      # Change from 30 to 60 days
+  max_results: 100           # Change from 50 to 100 emails
+```
+
+## 🐛 Troubleshooting
+
+### Issue 1: "Total indexed: 0 documents"
+
+**Symptoms:**
+```
+✅ Found 5 relevant emails
+✅ Extracted 5 items
+❌ Total indexed: 0 documents    ← Problem!
+❌ Context: 0 documents
+```
+
+**Cause:** VOYAGE_API_KEY not loaded or invalid. The RAG system needs Voyage AI to generate embeddings.
+
+**Fix:**
+
+```bash
+# Step 1: Test Voyage API key
+python test_voyage_api.py
+
+# Step 2: If test fails, check if key is loaded
+python diagnose_config.py
+# Look for: VOYAGE_API_KEY: ❌ NOT FOUND
+
+# Step 3: Add the key to .env (recommended)
+echo "VOYAGE_API_KEY=pa-v1-your-complete-voyage-key" >> .env
+
+# OR add to config.yaml
+# api_keys:
+#   voyage_api_key: "pa-v1-your-complete-key"
+
+# Step 4: Verify the fix
+python test_voyage_api.py
+# Should show: ✅ Voyage AI working!
+
+# Step 5: Run agent again
+python main.py --query "scan my email for university emails"
+# Should show: ✅ Total indexed: 5 documents
+```
+
+**Why this happens:** Without Voyage API key → No embeddings → Can't save to vector database → 0 documents indexed
+
+### Issue 2: "OPENAI_API_KEY not found"
+
+**Fix:**
+```bash
+# Option A: Interactive setup
+python main.py --setup
+
+# Option B: Add to .env manually
+echo "OPENAI_API_KEY=sk-proj-your-key" >> .env
+
+# Verify
+python main.py --validate
+```
+
+### Issue 3: "YAML syntax error in config.yaml"
+
+**Symptoms:**
+```
+Error loading: while parsing a block mapping
+  in "config.yaml", line 27, column 3
+```
+
+**Fix:**
+```bash
+# Check YAML syntax
+python validate_yaml.py
+
+# Use clean config template
+cp config_clean.yaml config.yaml
+
+# Edit with proper syntax (2 spaces, no tabs)
+```
+
+**YAML Rules:**
+- ✅ Use 2 spaces for indentation
+- ❌ Never use tabs
+- ✅ Keys have colons: `key: value`
+- ✅ Quotes for special chars: `key: "value-with-dash"`
+
+### Issue 4: "Error generating response"
+
+**Fix:**
+- Check that `OPENAI_API_KEY` is set correctly
+- Verify the model name (default: `gpt-4o-mini`)
+- Check API key balance at [OpenAI Platform](https://platform.openai.com/)
+- Run: `python diagnose_config.py` to check all settings
+
+### Issue 5: "Gmail authentication failed"
+
+**Fix:**
+- Ensure `credentials.json` is in the root directory
+- Delete `token.json` and re-authenticate
+- Check that Gmail API is enabled in Google Cloud Console
+- Verify EMAIL_ADDRESS in config matches your Gmail
+
+### Issue 6: "No emails found"
+
+**Possible causes:**
+- The LLM filter might be too strict
+- Date range too narrow (try `--days 90`)
+- Gmail credentials not configured
+- User's own sent emails are filtered out
+
+**Fix:**
+```bash
+# Try wider date range
+python main.py --days 90 --query "scan for university emails"
+
+# Check credentials
+python diagnose_config.py
+
+# Review filtered emails in output
+# Look for: "⊗ Filtered out X irrelevant emails"
+```
+
+### Issue 7: "Context: 0 documents" when querying
+
+**Cause:** You need to scan and index emails first before querying.
+
+**Fix:**
+```bash
+# Step 1: Scan emails first
+python main.py --query "scan my email for university emails"
+# Must show: ✅ Total indexed: 5 documents (not 0!)
+
+# Step 2: Now query the indexed data
+python main.py --query "what university emails did you find?"
+# Should show: Context: 5 documents
+```
+
+### Issue 8: "Vector DB error"
+
+**Fix:**
+```bash
+# Delete vector store and rebuild
+rm -rf data/vector_store/
+python main.py --query "scan my email"
+```
+
+### Debug Mode
+
+Enable detailed logging:
+```bash
+# Linux/Mac
+export CONFIG_DEBUG=true
+
+# Windows PowerShell
+$env:CONFIG_DEBUG="true"
+
+# Then run
+python main.py --query "scan my email"
+```
+
+### Diagnostic Tools
+
+```bash
+# Complete system check
+python diagnose_config.py
+
+# Test Voyage API (if indexing fails)
+python test_voyage_api.py
+
+# Validate YAML syntax
+python validate_yaml.py
+
+# Interactive config fixer
+python fix_config.py
+
+# Show current settings
+python main.py --show-config
+```
+
 ## 🤝 Contributing
 
 This is an open-source project! Contributions welcome:
@@ -287,27 +583,6 @@ This is an open-source project! Contributions welcome:
 4. Commit your changes (`git commit -m 'Add amazing feature'`)
 5. Push to the branch (`git push origin feature/amazing-feature`)
 6. Open a Pull Request
-
-## 🐛 Troubleshooting
-
-### "Error generating response"
-- Check that `OPENAI_API_KEY` is set correctly
-- Verify the model name (default: `gpt-4o-mini`)
-- Check API key balance at [OpenAI Platform](https://platform.openai.com/)
-
-### "Gmail authentication failed"
-- Ensure `credentials.json` is in the root directory
-- Delete `token.json` and re-authenticate
-- Check that Gmail API is enabled in Google Cloud Console
-
-### "No emails found"
-- The LLM filter might be too strict
-- Try setting `use_filtering=False` in email_scanner.py for debugging
-- Check date range (default is last 30 days)
-
-### "Vector DB error"
-- Delete `data/vector_store/` directory
-- Run again to recreate the database
 
 ## 📜 License
 
